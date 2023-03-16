@@ -408,7 +408,7 @@ static void __solve_cond(dfsan_label label, u8 r, bool add_nested, void *addr) {
         }
       }
     }
-    assert(__z3_solver.check() == z3::sat);
+    // assert(__z3_solver.check() == z3::sat);
     
     z3::expr e = (cond != result);
     if (__solve_expr(e)) {
@@ -577,13 +577,14 @@ static void __handle_gep(dfsan_label ptr_label, uptr ptr,
 
 int main(int argc, char* const argv[]) {
   
-  if (argc != 3) {
+  if (argc != 4) {
     fprintf(stderr, "Usage: %s target input\n", argv[0]);
     exit(1);    
   }
 
   char *program = argv[1];
-  char *input = argv[2];
+  char *target = argv[2];
+  char *input = argv[3];
 
   // setup output dir
   char *options = getenv("TAINT_OPTIONS");
@@ -649,8 +650,9 @@ int main(int argc, char* const argv[]) {
     setenv("TAINT_OPTIONS", options, 1);
     char* args[3];
     args[0] = program;
-    args[1] = input;
-    args[2] = NULL;
+    args[1] = target;
+    args[2] = input;
+    args[3] = NULL;
     execv(program, args);
     exit(0);
   }

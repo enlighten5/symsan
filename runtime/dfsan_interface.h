@@ -23,12 +23,50 @@
 extern "C" {
 #endif
 
+enum operators {
+  Not       = 1,
+  Neg       = 2,
+#define HANDLE_BINARY_INST(num, opcode, Class) opcode = num,
+#define HANDLE_MEMORY_INST(num, opcode, Class) opcode = num,
+#define HANDLE_CAST_INST(num, opcode, Class) opcode = num,
+#define HANDLE_OTHER_INST(num, opcode, Class) opcode = num,
+#define LAST_OTHER_INST(num) last_llvm_op = num,
+#include "llvm/IR/Instruction.def"
+#undef HANDLE_BINARY_INST
+#undef HANDLE_MEMORY_INST
+#undef HANDLE_CAST_INST
+#undef HANDLE_OTHER_INST
+#undef LAST_OTHER_INST
+  // self-defined
+  Free      = last_llvm_op + 3,
+  Extract   = last_llvm_op + 4,
+  Concat    = last_llvm_op + 5,
+  Arg       = last_llvm_op + 6,
+  // higher-order
+  fmemcmp   = last_llvm_op + 7,
+  fsize     = last_llvm_op + 8,
+};
+
+enum predicate {
+  bveq = 32,
+  bvneq = 33,
+  bvugt = 34,
+  bvuge = 35,
+  bvult = 36,
+  bvule = 37,
+  bvsgt = 38,
+  bvsge = 39,
+  bvslt = 40,
+  bvsle = 41
+};
 /// Signature of the callback argument to dfsan_set_write_callback().
 typedef void (*dfsan_write_callback_t)(int fd, const void *buf, size_t count);
 
 /// Computes the union of \c l1 and \c l2, possibly creating a union label in
 /// the process.
-dfsan_label dfsan_union(dfsan_label l1, dfsan_label l2, u8 op, u8 size);
+//dfsan_label dfsan_union(dfsan_label l1, dfsan_label l2, u8 op, u8 size);
+dfsan_label dfsan_union(dfsan_label l1, dfsan_label l2, u16 op, u16 size,
+                        u64 op1, u64 op2);
 
 /// Creates and returns a base label with the given description and user data.
 dfsan_label dfsan_create_label(int pos);
@@ -51,6 +89,8 @@ dfsan_label dfsan_get_label(long data);
 /// Retrieves the label associated with the data at the given address.
 dfsan_label dfsan_read_label(const void *addr, size_t size);
 
+void dfsan_store_label(dfsan_label l, void *addr, size_t size);
+
 /// Retrieves the starting address for the shadow memory of the given address
 const dfsan_label * dfsan_shadow_for(const void * addr);
 
@@ -70,6 +110,15 @@ void dfsan_set_write_callback(dfsan_write_callback_t labeled_write_callback);
 ///
 /// <label> <parent label 1> <parent label 2> <label description if any>
 void dfsan_dump_labels(int fd);
+
+void dfsan_init_qemu(void);
+
+void dfsan_unimplemented(char *fname);
+
+dfsan_label __taint_trace_cmp(dfsan_label l1, dfsan_label l2, u8 size, u32 predicate,
+                       u64 op1, u64 op2, u32 cid);
+
+void addContextRecording(u64 func_addr);
 
 /// Interceptor hooks.
 /// Whenever a dfsan's custom function is called the corresponding

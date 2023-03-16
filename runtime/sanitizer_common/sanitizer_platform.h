@@ -335,9 +335,9 @@
 #define SANITIZER_NLDBL_VERSION "GLIBC_2.4"
 #endif
 
-#if SANITIZER_GO == 0
+//#if SANITIZER_GO == 0
 # define SANITIZER_GO 0
-#endif
+//#endif
 
 // On PowerPC and ARM Thumb, calling pthread_exit() causes LSan to detect leaks.
 // pthread_exit() performs unwinding that leads to dlopen'ing libgcc_s.so.

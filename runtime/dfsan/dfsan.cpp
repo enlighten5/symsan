@@ -266,10 +266,21 @@ dfsan_label __taint_union_load(const dfsan_label *ls, uptr n) {
     }
   }
   if (shape) {
-    if (n == 1) return label0;
+    // if (n == 1) return label0;
+    if (n == 1) {
+      assert(get_label_info(label0)->size == 8);
+      return __taint_union(label0, CONST_LABEL, ZExt, 64, 0, 0);
+    }
 
-    AOUT("shape: label0: %d %d\n", label0, n);
-    return __taint_union(label0, (dfsan_label)n, Load, n * 8, 0, 0);
+    AOUT("shape: label0: %d %d shadow addr: %p app_for %p\n", label0, n, ls, app_for(ls));
+    // return __taint_union(label0, (dfsan_label)n, Load, n * 8, 0, 0);
+    if (n == 8) {
+      return __taint_union(label0, (dfsan_label)n, Load, n * 8, 0, 0);
+    } else {
+      // symqemu: extend label to 64-bit
+      dfsan_label out = __taint_union(label0, (dfsan_label)n, Load, n * 8, 0, 0);
+      return __taint_union(out, CONST_LABEL, ZExt, 64, 0, 0);
+    }
   }
 
   // fast path 2: all labels are extracted from a n-size label, then return that label
@@ -294,13 +305,17 @@ dfsan_label __taint_union_load(const dfsan_label *ls, uptr n) {
   // slowpath
   AOUT("union load slowpath at %p\n", __builtin_return_address(0));
   dfsan_label label = label0;
-  for (uptr i = get_label_info(label0)->size / 8; i < n;) {
+  // for (uptr i = get_label_info(label0)->size / 8; i < n;) {
+  // symqemu:
+  for (uptr i = 1; i < n;) {
     dfsan_label next_label = ls[i];
     u16 next_size = get_label_info(next_label)->size;
-    AOUT("next label=%u, size=%u\n", next_label, next_size);
+    AOUT("next label=%u, size=%u ls = %p\n", next_label, next_size, &ls[i]);
     if (!is_constant_label(next_label)) {
-      if (next_size <= (n - i) * 8) {
-        i += next_size / 8;
+      // if (next_size <= (n - i) * 8) {
+      if (next_size <= 64) {
+        // i += next_size / 8;
+        i += 1;
         label = __taint_union(label, next_label, Concat, i * 8, 0, 0);
       } else {
         Report("WARNING: partial loading expected=%d has=%d\n", n-i, next_size);
@@ -309,19 +324,20 @@ dfsan_label __taint_union_load(const dfsan_label *ls, uptr n) {
         return __taint_union(label, trunc, Concat, n * 8, 0, 0);
       }
     } else {
-      Report("WARNING: taint mixed with concrete %d\n", i);
+      // Report("WARNING: taint mixed with concrete %d %p\n", i, &ls[i]);
       char *c = (char *)app_for(&ls[i]);
       ++i;
       label = __taint_union(label, 0, Concat, i * 8, 0, *c);
     }
   }
   AOUT("\n");
+  label = __taint_union(label, CONST_LABEL, ZExt, 64, 0, 0);
   return label;
 }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE
 void __taint_union_store(dfsan_label l, dfsan_label *ls, uptr n) {
-  //AOUT("label = %d, n = %d, ls = %p\n", l, n, ls);
+  AOUT("label = %d, n = %d, ls = %p\n", l, n, ls);
   if (l != kInitializingLabel) {
     // for debugging
     dfsan_label h = atomic_load(&__dfsan_last_label, memory_order_relaxed);
@@ -424,7 +440,8 @@ void __taint_check_bounds(dfsan_label l, uptr addr) {
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE
 void dfsan_store_label(dfsan_label l, void *addr, uptr size) {
-  if (l == 0) return;
+  // This check is wrong. Removed.
+  // if (l == 0) return;
   __taint_union_store(l, shadow_for(addr), size);
 }
 
@@ -435,7 +452,13 @@ void __dfsan_unimplemented(char *fname) {
            fname);
 
 }
-
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE
+void dfsan_unimplemented(char *fname) {
+  if (flags().warn_unimplemented)
+    Report("WARNING: DataFlowSanitizer: call to unimplemented function %s\n",
+           fname);
+  Die();
+}
 // Use '-mllvm -dfsan-debug-nonzero-labels' and break on this function
 // to try to figure out where labels are being introduced in a nominally
 // label-free program.
@@ -488,7 +511,7 @@ void __dfsan_set_label(dfsan_label label, void *addr, uptr size) {
     if (label == *labelp)
       continue;
 
-    //AOUT("%p = %u\n", addr, label);
+    AOUT("set label %p = %u, label size %d shadow addr: %p\n", addr, label, get_label_info(label)->size, shadow_for(addr));
     *labelp = label;
   }
 }
@@ -711,7 +734,7 @@ static void InitializeTaintFile() {
 }
 
 // information is passed implicitly through flags()
-extern "C" void InitializeSolver();
+extern "C" void InitializeSolver(void);
 
 static void InitializeFlags() {
   SetCommonFlagsDefaults();
@@ -815,17 +838,83 @@ static void dfsan_init(int argc, char **argv, char **envp) {
   AddDieCallback(dfsan_fini);
 }
 
+static inline dfsan_label get_label_for(int fd, off_t offset) {
+  // check if fd is stdin, if so, the label hasn't been pre-allocated
+  if (is_stdin_taint()) return dfsan_create_label(offset);
+  // if fd is a tainted file, the label should have been pre-allocated
+  else {
+    const dfsan_label_info *info = dfsan_get_label_info(offset + CONST_OFFSET);
+    if (info->size == 0) { // not pre-allocated
+      // sometimes the file is read multiple times
+      // and it exceeds file size (should be related to qemu syscall).
+      return 0;
+    } else {
+      return (offset + CONST_OFFSET);
+    }
+  } 
+}
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE int
+__dfsan_open(const char *path, int oflags, mode_t mode) {
+  AOUT("__dfsan_open\n");
+  int fd = open(path, oflags, mode);
+  if (fd)
+    taint_set_file(path, fd);
+  return fd;
+}
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE ssize_t
+__dfsan_read(int fd, void *buf, size_t count, size_t *isSymbolicPage) {
+  off_t offset = lseek(fd, 0, SEEK_CUR);
+  ssize_t ret = read(fd, buf, count);
+  if (ret >= 0) {
+    if (taint_get_file(fd)) {
+      AOUT("offset = %d, ret = %d, count = %d\n", offset, ret, count);
+      for(ssize_t i = 0; i < ret; i++) {
+        dfsan_set_label(get_label_for(fd, offset + i), (char *)buf + i, 1);
+      }
+      *isSymbolicPage = 1;
+      // for (size_t i = ret; i < count; i++)
+      //   dfsan_set_label(-1, (char *)buf + i, 1);
+      // *ret_label = dfsan_union(0, 0, fsize, sizeof(ret) * 8, offset, 0);
+    } else {
+      dfsan_set_label(0, buf, ret);
+      *isSymbolicPage = 0;
+    }
+  }
+  return ret;
+}
+
+// Not implemented
+/*
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE off_t
+__dfsan_lseek(int fd, off_t offset, int whence, dfsan_label fd_label,
+             dfsan_label offset_label, dfsan_label whence_label,
+             dfsan_label *ret_label) {
+  off_t ret = lseek(fd, offset, whence);
+  if (ret != (off_t)-1) {
+    if (taint_get_file(fd)) {
+      taint_set_offset_label(offset_label);
+      if (offset_label) {
+        __taint_trace_offset(offset_label, offset, sizeof(offset) * 8);
+      }
+    }
+    *ret_label = offset_label;
+  } else *ret_label = 0;
+  return ret;
+}
+*/
 #if SANITIZER_CAN_USE_PREINIT_ARRAY
 __attribute__((section(".preinit_array"), used))
 static void (*dfsan_init_ptr)(int, char **, char **) = dfsan_init;
 #endif
 
 extern "C" {
-SANITIZER_INTERFACE_WEAK_DEF(void, InitializeSolver, void) {}
+// SANITIZER_INTERFACE_WEAK_DEF(void, InitializeSolver, void) {}
 
 // Default empty implementations (weak) for hooks
-SANITIZER_INTERFACE_WEAK_DEF(void, __taint_trace_cmp, dfsan_label, dfsan_label,
-                             u32, u32, u64, u64, u32) {}
+// SANITIZER_INTERFACE_WEAK_DEF(void, __taint_trace_cmp, dfsan_label, dfsan_label,
+//                              u32, u32, u64, u64, u32) {}
 SANITIZER_INTERFACE_WEAK_DEF(void, __taint_trace_cond, dfsan_label, u8, u32) {}
 SANITIZER_INTERFACE_WEAK_DEF(void, __taint_trace_indcall, dfsan_label) {}
 SANITIZER_INTERFACE_WEAK_DEF(void, __taint_trace_gep, dfsan_label, uint64_t,
@@ -833,5 +922,84 @@ SANITIZER_INTERFACE_WEAK_DEF(void, __taint_trace_gep, dfsan_label, uint64_t,
 SANITIZER_INTERFACE_WEAK_DEF(void, __taint_trace_offset, dfsan_label, int64_t,
                              unsigned) {}
 SANITIZER_INTERFACE_WEAK_DEF(void, __taint_trace_memcmp, dfsan_label) {}
-SANITIZER_WEAK_ATTRIBUTE THREADLOCAL u32 __taint_trace_callstack;
+// SANITIZER_WEAK_ATTRIBUTE THREADLOCAL u32 __taint_trace_callstack;
 }  // extern "C"
+
+// Code from fastgen.cpp
+static u32 __instance_id;
+static u32 __session_id;
+static int __pipe_fd;
+
+extern "C" void InitializeSolver() {
+  __instance_id = flags().instance_id;
+  __session_id = flags().session_id;
+  __pipe_fd = flags().pipe_fd;
+  AOUT("InitializeSolver: instance_id = %d, session_id = %d, pipe_fd = %d\n",
+       __instance_id, __session_id, __pipe_fd);
+}
+// filter?
+SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL u32 __taint_trace_callstack;
+
+static u8 get_const_result(u64 c1, u64 c2, u32 predicate) {
+  switch (predicate) {
+    case __dfsan::bveq:  return c1 == c2;
+    case __dfsan::bvneq: return c1 != c2;
+    case __dfsan::bvugt: return c1 > c2;
+    case __dfsan::bvuge: return c1 >= c2;
+    case __dfsan::bvult: return c1 < c2;
+    case __dfsan::bvule: return c1 <= c2;
+    case __dfsan::bvsgt: return (s64)c1 > (s64)c2;
+    case __dfsan::bvsge: return (s64)c1 >= (s64)c2;
+    case __dfsan::bvslt: return (s64)c1 < (s64)c2;
+    case __dfsan::bvsle: return (s64)c1 <= (s64)c2;
+    default: break;
+  }
+  return 0;
+}
+
+static inline void __solve_cond(dfsan_label label, u8 result, u8 add_nested, u32 cid, void *addr) {
+
+  u16 flags = 0;
+  if (add_nested) flags |= F_ADD_CONS;
+
+  // send info
+  pipe_msg msg = {
+    .msg_type = cond_type,
+    .flags = flags,
+    .instance_id = __instance_id,
+    .addr = (uptr)addr,
+    .context = __taint_trace_callstack,
+    .id = cid,
+    .label = label,
+    .result = result
+  };
+
+  internal_write(__pipe_fd, &msg, sizeof(msg));
+}
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE dfsan_label
+__taint_trace_cmp(dfsan_label op1, dfsan_label op2, u32 size, u32 predicate,
+                  u64 c1, u64 c2, u32 cid) {
+  if ((op1 == 0 && op2 == 0))
+    return 0;
+
+  void *addr = __builtin_return_address(0);
+
+  AOUT("solving cmp: %u %u %u %d %llu %llu 0x%x @%p\n",
+       op1, op2, size, predicate, c1, c2, cid, addr);
+
+  // save info to a union table slot
+  u8 r = get_const_result(c1, c2, predicate);
+  dfsan_label temp = dfsan_union(op1, op2, (predicate << 8) | ICmp, size, c1, c2);
+
+  // add nested only for matching cases
+  __solve_cond(temp, r, r, cid, addr);
+  return temp;
+}
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE void
+addContextRecording(u64 func_addr) {
+  u32 hash = xxhash(func_addr, 0, 0);
+  __taint_trace_callstack ^= hash;
+  // AOUT("UPDATE CONTEXT: %u\n", __taint_trace_callstack);
+}
