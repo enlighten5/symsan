@@ -411,6 +411,7 @@ static void __solve_cond(dfsan_label label, u8 r, bool add_nested, void *addr) {
     // assert(__z3_solver.check() == z3::sat);
     
     z3::expr e = (cond != result);
+    // disable sovling
     if (__solve_expr(e)) {
       AOUT("branch solved\n");
     } else {

@@ -18,6 +18,7 @@
 #include "sanitizer_common/sanitizer_internal_defs.h"
 #include "dfsan_platform.h"
 #include <stdio.h>
+#include <map>
 
 using __sanitizer::uptr;
 
@@ -100,6 +101,8 @@ template <typename T>
 void dfsan_set_label(dfsan_label label, T &data) {  // NOLINT
   dfsan_set_label(label, (void *)&data, sizeof(T));
 }
+extern std::map<uintptr_t, dfsan_label *> g_shadow_pages;
+extern uptr shadow_memory;
 
 namespace __dfsan {
 
@@ -107,9 +110,41 @@ const dfsan_label kInitializingLabel = -1;
 
 void InitializeInterceptors();
 
-inline dfsan_label *shadow_for(void *ptr) {
-  return (dfsan_label *) ((((uptr) ptr) & ShadowMask()) << 2);
+const uintptr_t kPageSize = 4096;
+
+/// Compute the corresponding page address.
+inline const uintptr_t pageStart(const void *addr) {
+  return ((uintptr_t)addr & ~(kPageSize - 1));
 }
+
+/// Compute the corresponding offset into the page.
+inline const uintptr_t pageOffset(void *addr) {
+  return ((uintptr_t)addr & (kPageSize - 1));
+}
+
+inline dfsan_label *shadow_for(void *ptr) {
+  if (auto shadowPageIt = g_shadow_pages.find(pageStart(ptr));
+        shadowPageIt != g_shadow_pages.end()){
+      return shadowPageIt->second + pageOffset(ptr);
+      }
+  return nullptr;
+}
+
+inline dfsan_label *getOrCreateShadow(void *ptr, dfsan_label l) {
+    if (auto *shadow = shadow_for(ptr))
+      return shadow;
+    if (l == 0)
+      return nullptr;
+    auto *newShadow =
+        static_cast<dfsan_label *>(malloc(kPageSize * sizeof(dfsan_label)));
+    memset(newShadow, 0, kPageSize * sizeof(dfsan_label));
+    g_shadow_pages[pageStart(ptr)] = newShadow;
+    return newShadow + pageOffset(ptr);
+}
+
+// inline dfsan_label *shadow_for(void *ptr) {
+//   return (dfsan_label *) ((((uptr) ptr) & ShadowMask()) << 2);
+// }
 
 inline const dfsan_label *shadow_for(const void *ptr) {
   return shadow_for(const_cast<void *>(ptr));

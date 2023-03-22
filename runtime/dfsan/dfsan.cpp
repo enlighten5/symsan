@@ -42,6 +42,8 @@
 #include <assert.h>
 #include <fcntl.h>
 
+std::map<uintptr_t, dfsan_label *> g_shadow_pages;
+
 using namespace __dfsan;
 
 typedef atomic_uint32_t atomic_dfsan_label;
@@ -60,6 +62,8 @@ static int __current_saved_stack_index = 0;
 
 // taint source
 struct taint_file __dfsan::tainted;
+
+char taint_file_name[PATH_MAX];
 
 // Hash table
 static const uptr hashtable_size = (1ULL << 32);
@@ -169,6 +173,13 @@ static inline bool is_kind_of_label(dfsan_label label, u16 kind) {
 static bool isZeroOrPowerOfTwo(uint16_t x) { return (x & (x - 1)) == 0; }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE
+int dfsan_concrete_page(void *addr) {
+  // Return true if the page is not shadowed.
+  if (g_shadow_pages.find(pageStart(addr)) == g_shadow_pages.end()) return 1;
+  return 0;
+}
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE
 dfsan_label __taint_union(dfsan_label l1, dfsan_label l2, u16 op, u16 size,
                           u64 op1, u64 op2) {
   if (l1 > l2 && is_commutative(op)) {
@@ -226,8 +237,12 @@ dfsan_label __taint_union(dfsan_label l1, dfsan_label l2, u16 op, u16 size,
   return label;
 }
 
+inline uptr getPageStart(uptr addr) { return addr & ~(kPageSize - 1); }
+
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE
-dfsan_label __taint_union_load(const dfsan_label *ls, uptr n) {
+dfsan_label __taint_union_load(const dfsan_label *ls, const void *addr, uptr n) {
+  // TODO: Return if concrete.
+  if (ls == nullptr) return 0;
   dfsan_label label0 = ls[0];
   if (label0 == kInitializingLabel) return kInitializingLabel;
 
@@ -235,14 +250,31 @@ dfsan_label __taint_union_load(const dfsan_label *ls, uptr n) {
   // dfsan_label l = atomic_load(&__dfsan_last_label, memory_order_relaxed);
   // assert(label0 <= l);
   if (label0 >= CONST_OFFSET) assert(get_label_info(label0)->size != 0);
+  uptr pos = 0;
+  dfsan_label *next_ls = nullptr;
+  if (getPageStart((uptr)addr) != getPageStart((uptr)addr + n - 1)) {
+    // cross page
+    pos = kPageSize - ((uptr)addr & (kPageSize - 1));
+    uptr next_addr = (uptr)addr + n;
+    // the second argument is not used.
+    next_ls = getOrCreateShadow((void*)next_addr, -1);
+    AOUT("cross page load addr: %p, n: %u position %u\n", addr, n, pos);
+  }
 
   // fast path 1: constant and bounds
   if (is_constant_label(label0) || is_kind_of_label(label0, Alloca)) {
     bool same = true;
     for (uptr i = 1; i < n; i++) {
-      if (ls[i] != label0) {
-        same = false;
-        break;
+      if (next_ls && i >= pos) {
+        if (next_ls[i - pos] != label0) {
+          same = false;
+          break;
+        }
+      } else {
+        if (ls[i] != label0) {
+          same = false;
+          break;
+        }
       }
     }
     if (same) return label0;
@@ -257,7 +289,12 @@ dfsan_label __taint_union_load(const dfsan_label *ls, uptr n) {
   } else {
     off_t offset = get_label_info(label0)->op1.i;
     for (uptr i = 1; i != n; ++i) {
-      dfsan_label next_label = ls[i];
+      dfsan_label next_label;
+      if (next_ls && i >= pos) {
+        next_label = next_ls[i - pos];
+      } else {
+        next_label = ls[i];
+      }
       if (next_label == kInitializingLabel) return kInitializingLabel;
       else if (get_label_info(next_label)->op1.i != offset + i) {
         shape = false;
@@ -272,7 +309,7 @@ dfsan_label __taint_union_load(const dfsan_label *ls, uptr n) {
       return __taint_union(label0, CONST_LABEL, ZExt, 64, 0, 0);
     }
 
-    AOUT("shape: label0: %d %d shadow addr: %p app_for %p\n", label0, n, ls, app_for(ls));
+    AOUT("shape: label0: %d %d shadow addr: %p\n", label0, n, ls);
     // return __taint_union(label0, (dfsan_label)n, Load, n * 8, 0, 0);
     if (n == 8) {
       return __taint_union(label0, (dfsan_label)n, Load, n * 8, 0, 0);
@@ -288,7 +325,12 @@ dfsan_label __taint_union_load(const dfsan_label *ls, uptr n) {
     dfsan_label parent = get_label_info(label0)->l1;
     uptr offset = 0;
     for (uptr i = 0; i < n; i++) {
-      dfsan_label_info *info = get_label_info(ls[i]);
+      dfsan_label_info *info = nullptr;
+      if (next_ls && i >= pos) {
+        info = get_label_info(next_ls[i - pos]);
+      } else {
+        info = get_label_info(ls[i]);
+      }
       if (!is_kind_of_label(ls[i], Extract)
             || offset != info->op2.i
             || parent != info->l1) {
@@ -308,9 +350,18 @@ dfsan_label __taint_union_load(const dfsan_label *ls, uptr n) {
   // for (uptr i = get_label_info(label0)->size / 8; i < n;) {
   // symqemu:
   for (uptr i = 1; i < n;) {
-    dfsan_label next_label = ls[i];
+    dfsan_label next_label;
+    if (next_ls && i >= pos) {
+      next_label = next_ls[i - pos];
+    } else {
+      next_label = ls[i];
+    }
     u16 next_size = get_label_info(next_label)->size;
     AOUT("next label=%u, size=%u ls = %p\n", next_label, next_size, &ls[i]);
+    if (next_size == 0) {
+      // next_label = 0;
+      AOUT("shadow %p is not initialized\n", &ls[i]);
+    }
     if (!is_constant_label(next_label)) {
       // if (next_size <= (n - i) * 8) {
       if (next_size <= 64) {
@@ -325,9 +376,11 @@ dfsan_label __taint_union_load(const dfsan_label *ls, uptr n) {
       }
     } else {
       // Report("WARNING: taint mixed with concrete %d %p\n", i, &ls[i]);
-      char *c = (char *)app_for(&ls[i]);
+      // symqemu: disable app_for for now.
+      // char *c = (char *)app_for(&ls[i]);
       ++i;
-      label = __taint_union(label, 0, Concat, i * 8, 0, *c);
+      // label = __taint_union(label, 0, Concat, i * 8, 0, *c);
+      label = __taint_union(label, 0, Concat, i * 8, 0, 0);
     }
   }
   AOUT("\n");
@@ -336,22 +389,45 @@ dfsan_label __taint_union_load(const dfsan_label *ls, uptr n) {
 }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE
-void __taint_union_store(dfsan_label l, dfsan_label *ls, uptr n) {
-  AOUT("label = %d, n = %d, ls = %p\n", l, n, ls);
+void __taint_union_store(dfsan_label l, dfsan_label *ls, const void *addr, uptr n) {
+  // AOUT("label = %d, n = %d, ls = %p\n", l, n, ls);
+  // TODO: add concrete page check
+  uptr pos = 0;
+  dfsan_label *next_ls = nullptr;
+  if (getPageStart((uptr)addr) != getPageStart((uptr)addr + n - 1)) {
+    // cross page
+    AOUT("cross page store addr: %p, n: %u\n", addr, n);
+    pos = kPageSize - ((uptr)addr & (kPageSize - 1));
+    uptr next_addr = (uptr)addr + n;
+    // the second argument is not used.
+    next_ls = getOrCreateShadow((void*)next_addr, -1);
+  }
   if (l != kInitializingLabel) {
     // for debugging
     dfsan_label h = atomic_load(&__dfsan_last_label, memory_order_relaxed);
     assert(l <= h);
   } else {
-    for (uptr i = 0; i < n; ++i)
-      ls[i] = l;
+    for (uptr i = 0; i < n; ++i) {
+      if (next_ls && i >= pos) {
+        assert(pos != 0);
+        next_ls[i - pos] = l;
+      } else {
+        ls[i] = l;
+      }
+    }
     return;
   }
 
   // fast path 1: constant and bounds
   if (l == 0 || is_kind_of_label(l, Alloca)) {
-    for (uptr i = 0; i < n; ++i)
-      ls[i] = l;
+    for (uptr i = 0; i < n; ++i){
+      if (next_ls && i >= pos) {
+        assert(pos != 0);
+        next_ls[i - pos] = l;
+      } else {
+        ls[i] = l;
+      }
+    }
     return;
   }
 
@@ -369,14 +445,26 @@ void __taint_union_store(dfsan_label l, dfsan_label *ls, uptr n) {
     if (n > info->l2) {
       Report("WARNING: store size=%u larger than load size=%d\n", n, info->l2);
     }
-    for (uptr i = 0; i < n; ++i)
-      ls[i] = label0 + i;
+    for (uptr i = 0; i < n; ++i){
+      if (next_ls && i >= pos) {
+        assert(pos != 0);
+        next_ls[i - pos] = label0 + i;
+      } else {
+        ls[i] = label0 + i;
+      }
+    }
     return;
   }
 
   // default fall through
   for (uptr i = 0; i < n; ++i) {
-    ls[i] = __taint_union(l, CONST_LABEL, Extract, 8, 0, i * 8);
+    if (next_ls && i >= pos) {
+      assert(pos != 0);
+      next_ls[i - pos] = __taint_union(l, CONST_LABEL, Extract, 8, 0, i * 8);
+    } else {
+      ls[i] = __taint_union(l, CONST_LABEL, Extract, 8, 0, i * 8);
+    }
+    // ls[i] = __taint_union(l, CONST_LABEL, Extract, 8, 0, i * 8);
   }
 }
 
@@ -442,7 +530,10 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE
 void dfsan_store_label(dfsan_label l, void *addr, uptr size) {
   // This check is wrong. Removed.
   // if (l == 0) return;
-  __taint_union_store(l, shadow_for(addr), size);
+  // __taint_union_store(l, shadow_for(addr), size);
+  dfsan_label *ls = getOrCreateShadow(addr, l);
+  if (ls == nullptr) return;
+  __taint_union_store(l, ls, addr, size);
 }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE
@@ -499,7 +590,8 @@ dfsan_label dfsan_create_label(off_t offset) {
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE
 void __dfsan_set_label(dfsan_label label, void *addr, uptr size) {
-  for (dfsan_label *labelp = shadow_for(addr); size != 0; --size, ++labelp) {
+  for (dfsan_label *labelp = getOrCreateShadow(addr, label); size != 0; --size, ++labelp) {
+    if (labelp == nullptr && label == 0) break;
     // Don't write the label if it is already the value we need it to be.
     // In a program where most addresses are not labeled, it is common that
     // a page of shadow memory is entirely zeroed.  The Linux copy-on-write
@@ -541,7 +633,7 @@ SANITIZER_INTERFACE_ATTRIBUTE dfsan_label
 dfsan_read_label(const void *addr, uptr size) {
   if (size == 0)
     return 0;
-  return __taint_union_load(shadow_for(addr), size);
+  return __taint_union_load(shadow_for(addr), addr, size);
 }
 
 SANITIZER_INTERFACE_ATTRIBUTE dfsan_label
@@ -602,7 +694,8 @@ SANITIZER_INTERFACE_ATTRIBUTE void
 taint_set_file(const char *filename, int fd) {
   char path[PATH_MAX];
   realpath(filename, path);
-  if (internal_strcmp(tainted.filename, path) == 0) {
+  // if (internal_strcmp(tainted.filename, path) == 0) {
+  if (internal_strcmp(taint_file_name, path) == 0) {
     tainted.fd = fd;
     AOUT("fd:%d created\n", fd);
   }
@@ -722,7 +815,9 @@ static void InitializeTaintFile() {
       Printf("FATAL: failed to map a copy of input file\n");
       Die();
     }
+    realpath(filename, taint_file_name);
     AOUT("%s %lld size\n", filename, tainted.size);
+    AOUT("tainted filename %s\n", tainted.filename);
   }
 
   if (tainted.fd != -1 && !tainted.is_stdin) {
@@ -792,7 +887,9 @@ static void dfsan_init(int argc, char **argv, char **envp) {
   print_debug = flags().debug;
 
   ::InitializePlatformEarly();
-  MmapFixedSuperNoReserve(ShadowAddr(), UnionTableAddr() - ShadowAddr());
+  // Disable direct shadow memopry mapping.
+  // MmapFixedSuperNoReserve(ShadowAddr(), UnionTableAddr() - ShadowAddr());
+  MmapFixedSuperNoReserve(HashTableAddr(), UnionTableAddr() - HashTableAddr());
   __dfsan_label_info = (dfsan_label_info *)UnionTableAddr();
 
   // init union table

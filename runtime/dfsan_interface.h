@@ -59,6 +59,9 @@ enum predicate {
   bvslt = 40,
   bvsle = 41
 };
+/// Check if a page is concrete.
+int dfsan_concrete_page(void *addr);
+
 /// Signature of the callback argument to dfsan_set_write_callback().
 typedef void (*dfsan_write_callback_t)(int fd, const void *buf, size_t count);
 
