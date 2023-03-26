@@ -337,7 +337,7 @@ dfsan_label __taint_union_load(const dfsan_label *ls, uptr n) {
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE
 void __taint_union_store(dfsan_label l, dfsan_label *ls, uptr n) {
-  AOUT("label = %d, n = %d, ls = %p\n", l, n, ls);
+  // AOUT("label = %d, n = %d, ls = %p\n", l, n, ls);
   if (l != kInitializingLabel) {
     // for debugging
     dfsan_label h = atomic_load(&__dfsan_last_label, memory_order_relaxed);
@@ -869,6 +869,11 @@ __dfsan_read(int fd, void *buf, size_t count, size_t *isSymbolicPage) {
   ssize_t ret = read(fd, buf, count);
   if (ret >= 0) {
     if (taint_get_file(fd)) {
+      if (offset > tainted.size) {
+        // Avoid reusing labels that are not pre-allocated.
+        *isSymbolicPage = 1;
+        return ret;
+      }
       AOUT("offset = %d, ret = %d, count = %d\n", offset, ret, count);
       for(ssize_t i = 0; i < ret; i++) {
         dfsan_set_label(get_label_for(fd, offset + i), (char *)buf + i, 1);
@@ -994,7 +999,8 @@ __taint_trace_cmp(dfsan_label op1, dfsan_label op2, u32 size, u32 predicate,
 
   // add nested only for matching cases
   __solve_cond(temp, r, r, cid, addr);
-  return temp;
+  // Convert bool to bv expression.
+  return dfsan_union(temp, 0, Ite, 64, 0, 0);
 }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE void

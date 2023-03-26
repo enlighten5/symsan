@@ -159,6 +159,7 @@ enum operators {
   // higher-order
   fmemcmp   = last_llvm_op + 7,
   fsize     = last_llvm_op + 8,
+  Ite       = last_llvm_op + 9,
 };
 
 enum predicate {
@@ -177,6 +178,7 @@ enum predicate {
 static inline bool is_commutative(unsigned char op) {
   switch(op) {
     case Not:
+    case Neg:
     case And:
     case Or:
     case Xor:

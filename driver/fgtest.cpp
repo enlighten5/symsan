@@ -136,8 +136,8 @@ static z3::expr serialize(dfsan_label label, std::unordered_set<u32> &deps) {
   }
 
   dfsan_label_info *info = get_label_info(label);
-  AOUT("%u = (l1:%u, l2:%u, op:%u, size:%u, op1:%llu, op2:%llu)\n",
-       label, info->l1, info->l2, info->op, info->size, info->op1.i, info->op2.i);
+  // AOUT("%u = (l1:%u, l2:%u, op:%u, size:%u, op1:%llu, op2:%llu)\n",
+  //      label, info->l1, info->l2, info->op, info->size, info->op1.i, info->op2.i);
 
   auto expr_itr = expr_cache.find(label);
   if (expr_itr != expr_cache.end()) {
@@ -190,15 +190,17 @@ static z3::expr serialize(dfsan_label label, std::unordered_set<u32> &deps) {
     tsize_cache[label] = tsize_cache[info->l1]; // lazy init
     return cache_expr(label, base.extract((info->op2.i + info->size) - 1, info->op2.i), deps);
   } else if (info->op == Not) {
-    if (info->l2 == 0 || info->size != 1) {
+    if (info->l2 == 0/* || info->size != 1*/) {
       throw z3::exception("invalid Not operation");
     }
     z3::expr e = serialize(info->l2, deps);
     tsize_cache[label] = tsize_cache[info->l2]; // lazy init
     if (!e.is_bool()) {
-      throw z3::exception("Only LNot should be recorded");
+      return cache_expr(label, ~e, deps);
+      // throw z3::exception("Only LNot should be recorded");
+    } else {
+      return cache_expr(label, !e, deps);
     }
-    return cache_expr(label, !e, deps);
   } else if (info->op == Neg) {
     if (info->l2 == 0) {
       throw z3::exception("invalid Neg predicate");
@@ -232,6 +234,17 @@ static z3::expr serialize(dfsan_label label, std::unordered_set<u32> &deps) {
       return base - offset;
     } else {
       return base;
+    }
+  } else if (info->op == Ite) {
+    // Covert bool expression to bv.
+    z3::expr op1 = serialize(info->l1, deps);
+    if (op1.is_bool()) {
+      z3::expr e = z3::ite(op1, __z3_context.bv_val(0, 64),
+                                     __z3_context.bv_val(1, 64));
+      tsize_cache[label] = tsize_cache[info->l1]; // lazy init
+      return cache_expr(label, e, deps);
+    } else {
+      throw z3::exception("invalid Ite operation(for bool expr only)");
     }
   }
 
