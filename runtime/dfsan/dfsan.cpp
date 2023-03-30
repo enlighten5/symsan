@@ -962,21 +962,39 @@ static u8 get_const_result(u64 c1, u64 c2, u32 predicate) {
   return 0;
 }
 
-static inline void __solve_cond(dfsan_label label, u8 result, u8 add_nested, u32 cid, void *addr) {
+struct PipeMsg {
+  uint32_t msg_type; //gep, cond, add_constraints, strcmp 
+  uint32_t tid;  
+  uint32_t label;
+  uint64_t result; //direction for conditional branch, index for GEP
+  uint64_t addr;
+  uint64_t ctx; 
+  uint32_t localcnt; 
+  uint32_t bid;
+  uint32_t sctx;
+  uint32_t predicate;
+  uint64_t target_cond;
+} __attribute__((packed));
 
-  u16 flags = 0;
-  if (add_nested) flags |= F_ADD_CONS;
+static inline void __solve_cond(dfsan_label label, u8 result, u8 predicate, u32 cid, void *addr, u64 c2) {
+
+  // u16 flags = 0;
+  // if (add_nested) flags |= F_ADD_CONS;
 
   // send info
-  pipe_msg msg = {
+  PipeMsg msg = {
     .msg_type = cond_type,
-    .flags = flags,
-    .instance_id = __instance_id,
-    .addr = (uptr)addr,
-    .context = __taint_trace_callstack,
-    .id = cid,
+    .tid = __session_id,
     .label = label,
-    .result = result
+    //.instance_id = __instance_id,
+    .result = result,
+    .addr = (uptr)addr,
+    .ctx = __taint_trace_callstack,
+    .localcnt = 0, //FIXME not used.
+    .bid = cid,
+    .sctx = 0,
+    .predicate = predicate,
+    .target_cond = c2,
   };
 
   internal_write(__pipe_fd, &msg, sizeof(msg));
@@ -998,7 +1016,7 @@ __taint_trace_cmp(dfsan_label op1, dfsan_label op2, u32 size, u32 predicate,
   dfsan_label temp = dfsan_union(op1, op2, (predicate << 8) | ICmp, size, c1, c2);
 
   // add nested only for matching cases
-  __solve_cond(temp, r, r, cid, addr);
+  __solve_cond(temp, r, predicate, cid, addr, c2);
   // Convert bool to bv expression.
   return dfsan_union(temp, 0, Ite, 64, 0, 0);
 }
