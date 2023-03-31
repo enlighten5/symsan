@@ -40,15 +40,29 @@ typedef union {
   double d;
 } data;
 
+// struct dfsan_label_info {
+//   dfsan_label l1;
+//   dfsan_label l2;
+//   data op1;
+//   data op2;
+//   u16 op;
+//   u16 size; // FIXME: this limit the size of the operand to 65535 bits or bytes (in case of memcmp)
+//   u32 hash;
+// } __attribute__((aligned (8), packed));
+
 struct dfsan_label_info {
   dfsan_label l1;
   dfsan_label l2;
-  data op1;
-  data op2;
+  u64 op1;
+  u64 op2;
   u16 op;
-  u16 size; // FIXME: this limit the size of the operand to 65535 bits or bytes (in case of memcmp)
+  u16 size;
   u32 hash;
-} __attribute__((aligned (8), packed));
+  u32 tree_size;
+  u32 depth;
+  u8 flags;
+  u8 padding[7];
+} __attribute__((packed));
 
 #ifndef PATH_MAX
 # define PATH_MAX 4096

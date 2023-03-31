@@ -255,11 +255,11 @@ dfsan_label __taint_union_load(const dfsan_label *ls, uptr n) {
     // not raw input bytes
     shape = false;
   } else {
-    off_t offset = get_label_info(label0)->op1.i;
+    off_t offset = get_label_info(label0)->op1;
     for (uptr i = 1; i != n; ++i) {
       dfsan_label next_label = ls[i];
       if (next_label == kInitializingLabel) return kInitializingLabel;
-      else if (get_label_info(next_label)->op1.i != offset + i) {
+      else if (get_label_info(next_label)->op1 != offset + i) {
         shape = false;
         break;
       }
@@ -290,7 +290,7 @@ dfsan_label __taint_union_load(const dfsan_label *ls, uptr n) {
     for (uptr i = 0; i < n; i++) {
       dfsan_label_info *info = get_label_info(ls[i]);
       if (!is_kind_of_label(ls[i], Extract)
-            || offset != info->op2.i
+            || offset != info->op2
             || parent != info->l1) {
         break;
       }
@@ -406,8 +406,8 @@ dfsan_label __taint_trace_alloca(dfsan_label l, u64 size, u64 elem_size, u64 bas
     info->l2    = l;
     info->op    = Alloca;
     info->size  = sizeof(void*) * 8;
-    info->op1.i = base;
-    info->op2.i = base + size * elem_size;
+    info->op1 = base;
+    info->op2 = base + size * elem_size;
 
     return __alloca_stack_top;
   } else {
@@ -428,8 +428,8 @@ void __taint_check_bounds(dfsan_label l, uptr addr) {
       // UAF
       AOUT("ERROR: UAF detected %p = %d @%p\n", addr, l, __builtin_return_address(0));
     } else if (info->op == Alloca) {
-      AOUT("addr = %p, lower = %p, upper = %p\n", addr, info->op1.i, info->op2.i);
-      if (addr < info->op1.i || addr >= info->op2.i) {
+      AOUT("addr = %p, lower = %p, upper = %p\n", addr, info->op1, info->op2);
+      if (addr < info->op1 || addr >= info->op2) {
         AOUT("ERROR: OOB detected %p = %d @%p\n", addr, l, __builtin_return_address(0));
       }
     } else {
@@ -491,7 +491,7 @@ dfsan_label dfsan_create_label(off_t offset) {
   internal_memset(&__dfsan_label_info[label], 0, sizeof(dfsan_label_info));
   __dfsan_label_info[label].size = 8;
   // label may not equal to offset when using stdin
-  __dfsan_label_info[label].op1.i = offset;
+  __dfsan_label_info[label].op1 = offset;
   // init a non-zero hash
   __dfsan_label_info[label].hash = xxhash(offset, 0, 8);
   return label;

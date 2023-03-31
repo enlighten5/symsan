@@ -180,7 +180,7 @@ __taint_trace_memcmp(dfsan_label label) {
   size_t msg_size = sizeof(memcmp_msg) + info->size;
   memcmp_msg *mmsg = (memcmp_msg*)__builtin_alloca(msg_size);
   mmsg->label = label;
-  internal_memcpy(mmsg->content, (void*)info->op1.i, info->size); // concrete oprand is always in op1
+  internal_memcpy(mmsg->content, (void*)info->op1, info->size); // concrete oprand is always in op1
 
   // FIXME: assuming single writer so msg will arrive in the same order
   internal_write(__pipe_fd, mmsg, msg_size);

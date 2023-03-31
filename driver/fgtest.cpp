@@ -137,7 +137,7 @@ static z3::expr serialize(dfsan_label label, std::unordered_set<u32> &deps) {
 
   dfsan_label_info *info = get_label_info(label);
   // AOUT("%u = (l1:%u, l2:%u, op:%u, size:%u, op1:%llu, op2:%llu)\n",
-  //      label, info->l1, info->l2, info->op, info->size, info->op1.i, info->op2.i);
+  //      label, info->l1, info->l2, info->op, info->size, info->op1, info->op2);
 
   auto expr_itr = expr_cache.find(label);
   if (expr_itr != expr_cache.end()) {
@@ -149,14 +149,14 @@ static z3::expr serialize(dfsan_label label, std::unordered_set<u32> &deps) {
   // special ops
   if (info->op == 0) {
     // input
-    z3::symbol symbol = __z3_context.int_symbol(info->op1.i);
+    z3::symbol symbol = __z3_context.int_symbol(info->op1);
     z3::sort sort = __z3_context.bv_sort(8);
     tsize_cache[label] = 1; // lazy init
-    deps.insert(info->op1.i);
+    deps.insert(info->op1);
     // caching is not super helpful
     return __z3_context.constant(symbol, sort);
   } else if (info->op == Load) {
-    u64 offset = get_label_info(info->l1)->op1.i;
+    u64 offset = get_label_info(info->l1)->op1;
     z3::symbol symbol = __z3_context.int_symbol(offset);
     z3::sort sort = __z3_context.bv_sort(8);
     z3::expr out = __z3_context.constant(symbol, sort);
@@ -188,7 +188,7 @@ static z3::expr serialize(dfsan_label label, std::unordered_set<u32> &deps) {
   } else if (info->op == Extract) {
     z3::expr base = serialize(info->l1, deps);
     tsize_cache[label] = tsize_cache[info->l1]; // lazy init
-    return cache_expr(label, base.extract((info->op2.i + info->size) - 1, info->op2.i), deps);
+    return cache_expr(label, base.extract((info->op2 + info->size) - 1, info->op2), deps);
   } else if (info->op == Not) {
     if (info->l2 == 0/* || info->size != 1*/) {
       throw z3::exception("invalid Not operation");
@@ -228,9 +228,9 @@ static z3::expr serialize(dfsan_label label, std::unordered_set<u32> &deps) {
     z3::expr base = __z3_context.constant(symbol, sort);
     tsize_cache[label] = 1; // lazy init
     // don't cache because of deps
-    if (info->op1.i) {
+    if (info->op1) {
       // minus the offset stored in op1
-      z3::expr offset = __z3_context.bv_val((uint64_t)info->op1.i, info->size);
+      z3::expr offset = __z3_context.bv_val((uint64_t)info->op1, info->size);
       return base - offset;
     } else {
       return base;
@@ -255,23 +255,23 @@ static z3::expr serialize(dfsan_label label, std::unordered_set<u32> &deps) {
     assert(info->l2 >= CONST_OFFSET);
     size = info->size - get_label_info(info->l2)->size;
   }
-  z3::expr op1 = __z3_context.bv_val((uint64_t)info->op1.i, size);
+  z3::expr op1 = __z3_context.bv_val((uint64_t)info->op1, size);
   if (info->l1 >= CONST_OFFSET) {
     op1 = serialize(info->l1, deps).simplify();
   } else if (info->size == 1) {
-    op1 = __z3_context.bool_val(info->op1.i == 1);
+    op1 = __z3_context.bool_val(info->op1 == 1);
   }
   if (info->op == Concat && info->l2 == 0) {
     assert(info->l1 >= CONST_OFFSET);
     size = info->size - get_label_info(info->l1)->size;
   }
-  z3::expr op2 = __z3_context.bv_val((uint64_t)info->op2.i, size);
+  z3::expr op2 = __z3_context.bv_val((uint64_t)info->op2, size);
   if (info->l2 >= CONST_OFFSET) {
     std::unordered_set<u32> deps2;
     op2 = serialize(info->l2, deps2).simplify();
     deps.insert(deps2.begin(),deps2.end());
   } else if (info->size == 1) {
-    op2 = __z3_context.bool_val(info->op2.i == 1);
+    op2 = __z3_context.bool_val(info->op2 == 1);
   }
   // update tree_size
   tsize_cache[label] = tsize_cache[info->l1] + tsize_cache[info->l2];
@@ -549,7 +549,7 @@ static void __handle_gep(dfsan_label ptr_label, uptr ptr,
           // when the size of the buffer is fixed
           z3::expr p = __z3_context.bv_val(ptr, 64);
           z3::expr np = idx * es + co + p;
-          __solve_gep(np, (uint64_t)bounds->op1.i, (uint64_t)bounds->op2.i, elem_size, addr);
+          __solve_gep(np, (uint64_t)bounds->op1, (uint64_t)bounds->op2, elem_size, addr);
         } else {
           // if the buffer size is input-dependent (not fixed)
           // check if over flow is possible
