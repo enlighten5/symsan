@@ -604,13 +604,14 @@ int main(int argc, char* const argv[]) {
   // setup output dir
   char *options = getenv("TAINT_OPTIONS");
   char *output = strstr(options, "output_dir=");
-  if (output) {
-    output += 11; // skip "output_dir="
-    char *end = strchr(output, ':'); // try ':' first, then ' '
-    if (end == NULL) end = strchr(output, ' ');
-    size_t n = end == NULL? strlen(output) : (size_t)(end - output);
-    __output_dir = strndup(output, n);
-  }
+  __output_dir = getenv("SYMCC_OUTPUT_DIR");
+  // if (output) {
+  //   output += 11; // skip "output_dir="
+  //   char *end = strchr(output, ':'); // try ':' first, then ' '
+  //   if (end == NULL) end = strchr(output, ' ');
+  //   size_t n = end == NULL? strlen(output) : (size_t)(end - output);
+  //   __output_dir = strndup(output, n);
+  // }
 
   // load input file
   struct stat st;
