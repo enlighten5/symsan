@@ -4,7 +4,7 @@ set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++ -g")
 
 ## simple driver for testing out-of-process solving
-add_executable(FGTest fgtest.cpp)
+add_executable(FGTest fgtest.cpp afl_trace_map.cpp third_party/xxhash/xxhash.cpp)
 set_target_properties(FGTest PROPERTIES OUTPUT_NAME "fgtest")
 target_include_directories(FGTest PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../runtime

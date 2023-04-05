@@ -3,7 +3,7 @@
 #include "version.h"
 
 #include "dfsan/dfsan.h"
-
+#include "afl_trace_map.h"
 #include <z3++.h>
 
 #include <unordered_map>
@@ -25,7 +25,7 @@
 #include <fcntl.h>
 
 using namespace __dfsan;
-
+using namespace qsym;
 #define OPTIMISTIC 1
 
 #undef AOUT
@@ -73,6 +73,8 @@ typedef struct {
   std::unordered_set<dfsan_label> input_deps;
 } branch_dep_t;
 static std::vector<branch_dep_t*> __branch_deps;
+
+AflTraceMap *_trace;
 
 static inline branch_dep_t* get_branch_dep(size_t n) {
   if (n >= __branch_deps.size()) {
@@ -672,6 +674,12 @@ int main(int argc, char* const argv[]) {
 
   close(pipefds[1]);
 
+  // get bitmap file from env SYMCC_AFL_COVERAGE_MAP
+  // so it's compatibale with symcc driver.
+  const char* bitmap = std::getenv("SYMCC_AFL_COVERAGE_MAP");
+  _trace = new AflTraceMap(bitmap);
+  // _trace(bitmap);
+
   pipe_msg msg;
   gep_msg gmsg;
   dfsan_label_info *info;
@@ -682,7 +690,10 @@ int main(int argc, char* const argv[]) {
     // solve constraints
     switch (msg.msg_type) {
       case cond_type:
-        __solve_cond(msg.label, msg.result, msg.flags & F_ADD_CONS, (void*)msg.addr);
+        if (_trace->isInterestingBranch(msg.addr, msg.result)) {
+          AOUT("Solving interesting branch @%p\n", msg.addr);
+          __solve_cond(msg.label, msg.result, msg.flags & F_ADD_CONS, (void*)msg.addr);
+        }
         break;
       case gep_type:
         if (read(pipefds[0], &gmsg, sizeof(gmsg)) != sizeof(gmsg)) {
