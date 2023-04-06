@@ -160,6 +160,7 @@ enum operators {
   fmemcmp   = last_llvm_op + 7,
   fsize     = last_llvm_op + 8,
   Ite       = last_llvm_op + 9,
+  Equal     = last_llvm_op + 10,
 };
 
 enum predicate {

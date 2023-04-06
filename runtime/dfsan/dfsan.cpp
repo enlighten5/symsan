@@ -188,7 +188,8 @@ dfsan_label __taint_union(dfsan_label l1, dfsan_label l2, u16 op, u16 size,
   }
 
   // special handling for bounds, which may use all four fields
-  if (op != Alloca) {
+  // special handling for equal, build expression for symbolic address.
+  if (op != Alloca && op != Equal) {
     if (l1 >= CONST_OFFSET) op1 = 0;
     if (l2 >= CONST_OFFSET) op2 = 0;
   }
@@ -992,6 +993,13 @@ __taint_trace_cmp(dfsan_label op1, dfsan_label op2, u32 size, u32 predicate,
 
   AOUT("solving cmp: %u %u %u %d %llu %llu 0x%x @%p\n",
        op1, op2, size, predicate, c1, c2, cid, addr);
+
+  if (predicate == Equal) {
+    // special handling for symbolic address.
+    __solve_cond(op1, false, true, cid, addr);
+    // Convert bool to bv expression.
+    return op1;
+  }
 
   // save info to a union table slot
   u8 r = get_const_result(c1, c2, predicate);

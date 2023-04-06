@@ -248,6 +248,12 @@ static z3::expr serialize(dfsan_label label, std::unordered_set<u32> &deps) {
     } else {
       throw z3::exception("invalid Ite operation(for bool expr only)");
     }
+  } else if (info->op == Equal) {
+    // build an equal expression for a symbolic address.
+    z3::expr e = serialize(info->l1, deps) == \
+                 __z3_context.bv_val((uint64_t)info->op1.i, info->size);
+    tsize_cache[label] = tsize_cache[info->l1]; // lazy init
+    return cache_expr(label, e, deps);
   }
 
   // common ops
@@ -330,7 +336,7 @@ static void generate_input(z3::model &m) {
     if (name.kind() == Z3_INT_SYMBOL) {
       int offset = name.to_int();
       u8 value = (u8)e.get_numeral_int();
-      AOUT("offset %d = %x\n", offset, value);
+      // AOUT("offset %d = %x\n", offset, value);
       lseek(fd, offset, SEEK_SET);
       write(fd, &value, sizeof(value));
     } else { // string symbol
@@ -408,7 +414,7 @@ static void __solve_cond(dfsan_label label, u8 r, bool add_nested, void *addr) {
     }
 
     __z3_solver.reset();
-    __z3_solver.set("timeout", 5000U);
+    __z3_solver.set("timeout", 10000U);
     // 2. add constraints
     expr_set_t added;
     for (auto off : inputs) {
@@ -452,7 +458,7 @@ static void __solve_cond(dfsan_label label, u8 r, bool add_nested, void *addr) {
     }
 
   } catch (z3::exception e) {
-    AOUT("WARNING: solving error: %s @%p\n", e.msg(), addr);
+    AOUT("WARNING: solving error: %s @%p label %d\n", e.msg(), addr, label);
   }
 
 }
