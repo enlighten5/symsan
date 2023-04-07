@@ -996,7 +996,7 @@ __taint_trace_cmp(dfsan_label op1, dfsan_label op2, u32 size, u32 predicate,
 
   if (predicate == Equal) {
     // special handling for symbolic address.
-    __solve_cond(op1, false, true, cid, addr);
+    __solve_cond(op1, true, false, cid, addr);
     // Convert bool to bv expression.
     return op1;
   }

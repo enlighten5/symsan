@@ -597,15 +597,23 @@ static void __handle_gep(dfsan_label ptr_label, uptr ptr,
 }
 
 int main(int argc, char* const argv[]) {
-  
-  if (argc != 4) {
-    fprintf(stderr, "Usage: %s target input\n", argv[0]);
-    exit(1);    
-  }
-
   char *program = argv[1];
   char *target = argv[2];
-  char *input = argv[3];
+  // Parse input file and other potential options and arguments.
+  char* input_opts = (char*) malloc(sizeof(char));
+  input_opts[0] = '\0';
+
+  // Loop through arguments starting from the third
+  for (int i = 3; i < argc; i++) {
+      if (i > 3) {
+        // Add a space before appending current argument to the input_opts string
+        input_opts = (char*) realloc(input_opts, strlen(input_opts) + strlen(argv[i]) + 2);
+        strcat(input_opts, " ");
+      } else {
+        input_opts = (char*) realloc(input_opts, strlen(input_opts) + strlen(argv[i]) + 1);
+      }
+      strcat(input_opts, argv[i]);
+  }
 
   // setup output dir
   char *options = getenv("TAINT_OPTIONS");
@@ -619,7 +627,8 @@ int main(int argc, char* const argv[]) {
   //   __output_dir = strndup(output, n);
   // }
 
-  // load input file
+  // load input file from symcc env.
+  char *input = getenv("SYMCC_INPUT_FILE");
   struct stat st;
   int fd = open(input, O_RDONLY);
   if (fd == -1) {
@@ -655,10 +664,10 @@ int main(int argc, char* const argv[]) {
   }
 
   // prepare the env and fork
-  int length = snprintf(NULL, 0, "taint_file=%s:shm_id=%d:pipe_fd=%d:debug=1",
+  int length = snprintf(NULL, 0, "taint_file=%s:shm_id=%d:pipe_fd=%d:debug=0",
                         input, shmid, pipefds[1]);
   options = (char *)malloc(length + 1);
-  snprintf(options, length + 1, "taint_file=%s:shm_id=%d:pipe_fd=%d:debug=1",
+  snprintf(options, length + 1, "taint_file=%s:shm_id=%d:pipe_fd=%d:debug=0",
            input, shmid, pipefds[1]);
   
   int pid = fork();
@@ -673,12 +682,13 @@ int main(int argc, char* const argv[]) {
     char* args[3];
     args[0] = program;
     args[1] = target;
-    args[2] = input;
+    args[2] = input_opts;
     args[3] = NULL;
     execv(program, args);
     exit(0);
   }
-
+  // Free dynamically allocated memory
+  free(input_opts);
   close(pipefds[1]);
 
   // get bitmap file from env SYMCC_AFL_COVERAGE_MAP
