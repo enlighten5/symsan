@@ -599,25 +599,10 @@ static void __handle_gep(dfsan_label ptr_label, uptr ptr,
 int main(int argc, char* const argv[]) {
   char *program = argv[1];
   char *target = argv[2];
-  // Parse input file and other potential options and arguments.
-  char* input_opts = (char*) malloc(sizeof(char));
-  input_opts[0] = '\0';
-
-  // Loop through arguments starting from the third
-  for (int i = 3; i < argc; i++) {
-      if (i > 3) {
-        // Add a space before appending current argument to the input_opts string
-        input_opts = (char*) realloc(input_opts, strlen(input_opts) + strlen(argv[i]) + 2);
-        strcat(input_opts, " ");
-      } else {
-        input_opts = (char*) realloc(input_opts, strlen(input_opts) + strlen(argv[i]) + 1);
-      }
-      strcat(input_opts, argv[i]);
-  }
 
   // setup output dir
   char *options = getenv("TAINT_OPTIONS");
-  char *output = strstr(options, "output_dir=");
+  // char *output = strstr(options, "output_dir=");
   __output_dir = getenv("SYMCC_OUTPUT_DIR");
   // if (output) {
   //   output += 11; // skip "output_dir="
@@ -679,16 +664,15 @@ int main(int argc, char* const argv[]) {
   if (pid == 0) {
     close(pipefds[0]); // close the read fd
     setenv("TAINT_OPTIONS", options, 1);
-    char* args[3];
-    args[0] = program;
-    args[1] = target;
-    args[2] = input_opts;
-    args[3] = NULL;
+    char* args[argc];
+    for (int i = 0; i < argc-1; i++) {
+      args[i] = argv[i+1];
+    }
+    args[argc-1] = NULL;
     execv(program, args);
     exit(0);
   }
-  // Free dynamically allocated memory
-  free(input_opts);
+
   close(pipefds[1]);
 
   // get bitmap file from env SYMCC_AFL_COVERAGE_MAP
