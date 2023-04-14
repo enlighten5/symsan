@@ -396,7 +396,7 @@ static void __solve_cond(dfsan_label label, u8 r, bool add_nested, void *addr) {
   try {
     std::unordered_set<dfsan_label> inputs;
     z3::expr cond = serialize(label, inputs);
-
+    // AOUT("z3 constraint: %s\n", cond.simplify().to_string().c_str());
     // collect additional input deps
     std::vector<dfsan_label> worklist;
     worklist.insert(worklist.begin(), inputs.begin(), inputs.end());
@@ -433,9 +433,9 @@ static void __solve_cond(dfsan_label label, u8 r, bool add_nested, void *addr) {
     
     z3::expr e = (cond != result);
     if (__solve_expr(e)) {
-      AOUT("branch solved\n");
+    //  AOUT("branch solved\n");
     } else {
-      AOUT("branch not solvable @%p\n", addr);
+    //  AOUT("branch not solvable @%p\n", addr);
       //AOUT("\n%s\n", __z3_solver.to_smt2().c_str());
       //AOUT("  tree_size = %d", __dfsan_label_info[label].tree_size);
     }
@@ -681,7 +681,7 @@ int main(int argc, char* const argv[]) {
   _trace = new AflTraceMap(bitmap);
   // _trace(bitmap);
 
-  pipe_msg msg;
+  pipeMsg msg;
   gep_msg gmsg;
   dfsan_label_info *info;
   size_t msg_size;
@@ -691,9 +691,14 @@ int main(int argc, char* const argv[]) {
     // solve constraints
     switch (msg.msg_type) {
       case cond_type:
-        if (_trace->isInterestingBranch(msg.addr, msg.result)) {
-          AOUT("Solving interesting branch @%p\n", msg.addr);
+        info = get_label_info(msg.label);
+        if (_trace->isInterestingBranch(msg.id, msg.result)) {
+          AOUT("Solving interesting branch @0x%lx\n", msg.id);
           __solve_cond(msg.label, msg.result, msg.flags & F_ADD_CONS, (void*)msg.addr);
+        } else {
+          // if (info->op == Equal) {
+          //   __solve_cond(msg.label, msg.result, msg.flags & F_ADD_CONS, (void*)msg.addr);
+          // }
         }
         break;
       case gep_type:

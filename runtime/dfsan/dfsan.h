@@ -214,6 +214,17 @@ struct pipe_msg {
   u64 result;
 } __attribute__((packed));
 
+struct pipeMsg {
+  u16 msg_type;
+  u16 flags;
+  u32 instance_id;
+  uptr addr;
+  u32 context;
+  u64 id;
+  u32 label;
+  u64 result;
+} __attribute__((packed));
+
 // additional info for gep
 struct gep_msg {
   u32 ptr_label;
