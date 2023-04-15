@@ -414,7 +414,7 @@ static void __solve_cond(dfsan_label label, u8 r, bool add_nested, void *addr) {
     }
 
     __z3_solver.reset();
-    __z3_solver.set("timeout", 10000U);
+    __z3_solver.set("timeout", 5000U);
     // 2. add constraints
     expr_set_t added;
     for (auto off : inputs) {
